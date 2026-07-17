@@ -12,7 +12,7 @@ import ebm2onnx
 from .utils import infer_model, create_session
 
 
-def train_titanic_binary_classification(interactions=0, with_categorical=False, old_th=65):
+def train_titanic_binary_classification(interactions=0, with_categorical=False, old_th=65, exclude=None):
     df = pd.read_csv(
         os.path.join('examples','titanic_train.csv'),
         #dtype= {
@@ -36,7 +36,11 @@ def train_titanic_binary_classification(interactions=0, with_categorical=False, 
     y_enc = le.fit_transform(y)
     x = df[feature_columns]
     x_train, x_test, y_train, y_test = train_test_split(x, y_enc)
-    model = ExplainableBoostingClassifier(interactions=interactions, feature_types=feature_types)
+    model = ExplainableBoostingClassifier(
+        interactions=interactions,
+        feature_types=feature_types,
+        exclude=exclude,
+    )
     model.fit(x_train, y_train)
 
     return model, x_test, y_test
@@ -263,6 +267,38 @@ def test_predict_binary_classification_with_categorical(interactions, explain, o
                 local_explain.data(i)['scores'],
                 pred_onnx[1][i][:, 0]
             )
+
+    assert np.allclose(pred_ebm, pred_onnx[0])
+
+
+def test_predict_binary_classification_with_excluded_feature():
+    # age (index 0) is excluded as a main effect but kept in the age & region
+    # interaction, so terms and features are no longer aligned one to one and
+    # region must not be mistaken for a continuous feature.
+    rng = np.random.RandomState(42)
+    n = 400
+    age = rng.randint(16, 80, n)
+    region = rng.choice(['US', 'TR', 'UK'], n)
+    y = (age * 0.05 + np.where(region == 'US', 1.0, 0.0) > 3.0).astype(int)
+    x = pd.DataFrame({'age': age, 'region': region})
+
+    model_ebm = ExplainableBoostingClassifier(
+        interactions=[(0, 1)],
+        feature_types=['continuous', 'nominal'],
+        exclude=[0],
+    )
+    model_ebm.fit(x, y)
+    pred_ebm = model_ebm.predict(x)
+
+    model_onnx = ebm2onnx.to_onnx(
+        model_ebm,
+        dtype={'age': 'int', 'region': 'str'},
+    )
+
+    pred_onnx = infer_model(model_onnx, {
+        'age': x['age'].values,
+        'region': x['region'].values.astype(object),
+    })
 
     assert np.allclose(pred_ebm, pred_onnx[0])
 

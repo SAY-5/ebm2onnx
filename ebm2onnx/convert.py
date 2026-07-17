@@ -138,17 +138,42 @@ def to_graph(model, dtype, name="ebm",
         features_org = FeatureType.COLUMN
 
     feature_types = list(model.feature_types_in_)
-    interaction_count = len(model.term_names_) - len(feature_types)
-    for _ in range(interaction_count):
-        feature_types.append('interaction')
 
     model_bins = deepcopy(model.bins_)
+
+    def get_or_create_input(i_feature_index):
+        # A feature that is excluded as a main effect but still used in an
+        # interaction has no input created by the main loop below, so create
+        # it on demand here.
+        if inputs[i_feature_index] is not None:
+            return inputs[i_feature_index]
+
+        i_feature_name = model.feature_names_in_[i_feature_index]
+        i_feature_dtype = infer_features_dtype(dtype, i_feature_name)
+        part = graph.create_input(root, i_feature_name, i_feature_dtype, [None])
+        if feature_types[i_feature_index] in ['nominal', 'ordinal'] \
+                and i_feature_dtype != onnx.TensorProto.STRING:
+            part = ops.cast(onnx.TensorProto.STRING)(part)
+        part = ops.flatten()(part)
+        inputs[i_feature_index] = part
+        # the interaction only consumes the transients of this input, so the
+        # input declaration and its nodes are carried into the final graph via
+        # parts to keep them wired.
+        parts.append(graph.clear_transients(part))
+        return part
 
     # first compute the score of each feature
     for feature_index in range(len(model.term_names_)):
         feature_name = model.term_names_[feature_index]
-        feature_type = feature_types[feature_index]
         feature_group = model.term_features_[feature_index]
+        # term_features_ maps a term to the feature(s) it uses. Terms and
+        # features are not aligned one to one when some features are excluded,
+        # so the feature type must be looked up through feature_group rather
+        # than the term index.
+        if len(feature_group) > 1:
+            feature_type = 'interaction'
+        else:
+            feature_type = feature_types[feature_group[0]]
 
         if feature_type == 'continuous':
             bins = [-np.inf, -np.inf] + list(model_bins[feature_group[0]][0])
@@ -160,7 +185,7 @@ def to_graph(model, dtype, name="ebm",
             else:
                 part = graph.create_input(root, feature_name, feature_dtype, [None])
             part = ops.flatten()(part)
-            inputs[feature_index] = part
+            inputs[feature_group[0]] = part
             part = ebm.get_bin_index_on_continuous_value(bins)(part)
             part = ebm.get_bin_score_1d(additive_terms)(part)
             parts.append(part)
@@ -184,7 +209,7 @@ def to_graph(model, dtype, name="ebm",
             if feature_dtype != onnx.TensorProto.STRING:
                 part = ops.cast(onnx.TensorProto.STRING)(part)
             part = ops.flatten()(part)
-            inputs[feature_index] = part
+            inputs[feature_group[0]] = part
             part = ebm.get_bin_index_on_categorical_value(col_mapping)(part)
             part = ebm.get_bin_score_1d(additive_terms)(part)
             parts.append(part)
@@ -204,12 +229,12 @@ def to_graph(model, dtype, name="ebm",
                     # otherwise, use the last binning for the feature
                     bin_index = -1 if way_count > len(model_bins[i_feature_index]) else way_count - 1
                     bins = [-np.inf, -np.inf] + list(model_bins[i_feature_index][bin_index])
-                    input = graph.strip_to_transients(inputs[i_feature_index])
+                    input = graph.strip_to_transients(get_or_create_input(i_feature_index))
                     i_parts.append(ebm.get_bin_index_on_continuous_value(bins)(input))
 
                 elif i_feature_type in ['nominal', 'ordinal']:
                     col_mapping = model_bins[i_feature_index][0]
-                    input = graph.strip_to_transients(inputs[i_feature_index])
+                    input = graph.strip_to_transients(get_or_create_input(i_feature_index))
                     i_parts.append(ebm.get_bin_index_on_categorical_value(col_mapping)(input))
 
                 else:
