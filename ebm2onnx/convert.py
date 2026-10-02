@@ -31,6 +31,8 @@ np_type_for = {
 bool_remap = {
     'False': '0',
     'True': '1',
+    '0': '0',
+    '1': '1',
 }
 
 
@@ -71,7 +73,7 @@ def get_dtype_from_pandas(df):
             dtype[k] = 'int'
         elif df_types[i] == bool:
             dtype[k] = 'bool'
-        elif df_types[i] == str:
+        elif df_types[i] == str or df_types[i].type is str:
             dtype[k] = 'str'
         elif df_types[i] == object:
             dtype[k] = 'str'
@@ -141,6 +143,16 @@ def to_graph(model, dtype, name="ebm",
 
     model_bins = deepcopy(model.bins_)
 
+    def get_categorical_mapping(i_feature_index):
+        if features_org == FeatureType.TENSOR:
+            raise ValueError("tensor-based inputs are not supported with nominal/ordinal features")
+        i_feature_name = model.feature_names_in_[i_feature_index]
+        col_mapping = model_bins[i_feature_index][0]
+        if infer_features_dtype(dtype, i_feature_name) == onnx.TensorProto.BOOL:
+            # ONNX casts booleans to 0/1; Interpret also used False/True.
+            col_mapping = {bool_remap[k]: v for k, v in col_mapping.items()}
+        return col_mapping
+
     def get_or_create_input(i_feature_index):
         # A feature that is excluded as a main effect but still used in an
         # interaction has no input created by the main loop below, so create
@@ -150,7 +162,10 @@ def to_graph(model, dtype, name="ebm",
 
         i_feature_name = model.feature_names_in_[i_feature_index]
         i_feature_dtype = infer_features_dtype(dtype, i_feature_name)
-        part = graph.create_input(root, i_feature_name, i_feature_dtype, [None])
+        if features_org == FeatureType.TENSOR:
+            part = graph.create_transient_by_name(root, i_feature_name, i_feature_dtype, [None])
+        else:
+            part = graph.create_input(root, i_feature_name, i_feature_dtype, [None])
         if feature_types[i_feature_index] in ['nominal', 'ordinal'] \
                 and i_feature_dtype != onnx.TensorProto.STRING:
             part = ops.cast(onnx.TensorProto.STRING)(part)
@@ -191,21 +206,12 @@ def to_graph(model, dtype, name="ebm",
             parts.append(part)
 
         elif feature_type in ['nominal', 'ordinal']:
-            col_mapping = model_bins[feature_group[0]][0]
+            col_mapping = get_categorical_mapping(feature_group[0])
             additive_terms = model.term_scores_[feature_index]
 
             feature_dtype = infer_features_dtype(dtype, feature_name)
-            if features_org == FeatureType.TENSOR:
-                raise ValueError("tensor-based inputs are not supported with nominal/ordinal features")
 
             part = graph.create_input(root, feature_name, feature_dtype, [None])
-            if feature_dtype == onnx.TensorProto.BOOL:
-                # ONNX converts booleans to strings 0/1, not False/True
-                col_mapping = {
-                    bool_remap[k]: v
-                    for k, v in col_mapping.items()
-                }
-                model_bins[feature_group[0]][0] = col_mapping
             if feature_dtype != onnx.TensorProto.STRING:
                 part = ops.cast(onnx.TensorProto.STRING)(part)
             part = ops.flatten()(part)
@@ -233,7 +239,7 @@ def to_graph(model, dtype, name="ebm",
                     i_parts.append(ebm.get_bin_index_on_continuous_value(bins)(input))
 
                 elif i_feature_type in ['nominal', 'ordinal']:
-                    col_mapping = model_bins[i_feature_index][0]
+                    col_mapping = get_categorical_mapping(i_feature_index)
                     input = graph.strip_to_transients(get_or_create_input(i_feature_index))
                     i_parts.append(ebm.get_bin_index_on_categorical_value(col_mapping)(input))
 
@@ -258,8 +264,13 @@ def to_graph(model, dtype, name="ebm",
         g = graph.merge(*parts)
 
     if type(model) is ExplainableBoostingClassifier:
-        class_type = onnx.TensorProto.STRING if model.classes_.dtype.type is np.str_ else onnx.TensorProto.INT64
         classes = model.classes_
+        string_classes = classes.dtype.type is np.str_ or (
+            classes.dtype.type is np.object_
+            and len(classes) > 0
+            and all(isinstance(c, str) for c in classes)
+        )
+        class_type = onnx.TensorProto.STRING if string_classes else onnx.TensorProto.INT64
         if class_type == onnx.TensorProto.STRING:
             classes = [c.encode("utf-8") for c in classes]
 

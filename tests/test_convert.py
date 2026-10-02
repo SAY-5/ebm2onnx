@@ -256,7 +256,7 @@ def test_predict_binary_classification_with_categorical(interactions, explain, o
         'Fare': x_test['Fare'].values,
         'Pclass': x_test['Pclass'].values,
         'Old': x_test['Old'].values,
-        'Embarked': x_test['Embarked'].values,
+        'Embarked': x_test['Embarked'].to_numpy(dtype=object),
     })
 
     if explain is True:
@@ -297,7 +297,7 @@ def test_predict_binary_classification_with_excluded_feature():
 
     pred_onnx = infer_model(model_onnx, {
         'age': x['age'].values,
-        'region': x['region'].values.astype(object),
+        'region': x['region'].to_numpy(dtype=object),
     })
 
     assert np.allclose(pred_ebm, pred_onnx[0])
@@ -325,7 +325,7 @@ def test_predict_multiclass_classification(encode_label, interactions):
     pred_onnx = infer_model(model_onnx, {
         'Customer_Age': x_test['Customer_Age'].values,
         'Dependent_count': x_test['Dependent_count'].values,
-        'Education_Level': x_test['Education_Level'].values,
+        'Education_Level': x_test['Education_Level'].to_numpy(dtype=object),
         'Credit_Limit': x_test['Credit_Limit'].values,
     })
 
@@ -351,7 +351,7 @@ def test_predict_proba_multiclass_classification():
     pred_onnx = infer_model(model_onnx, {
         'Customer_Age': x_test['Customer_Age'].values,
         'Dependent_count': x_test['Dependent_count'].values,
-        'Education_Level': x_test['Education_Level'].values,
+        'Education_Level': x_test['Education_Level'].to_numpy(dtype=object),
         'Credit_Limit': x_test['Credit_Limit'].values,
     })
 
@@ -441,7 +441,7 @@ def test_predict_binary_classification_missing_values():
         'Fare': x_test['Fare'].values,
         'Pclass': x_test['Pclass'].values,
         'Old': x_test['Old'].values,
-        'Embarked': x_test['Embarked'].values,
+        'Embarked': x_test['Embarked'].to_numpy(dtype=object),
     })
     
     assert np.allclose(pred_ebm, pred_onnx[0])
@@ -483,7 +483,7 @@ def test_predict_binary_classification_unknown_values():
         'Fare': x_test['Fare'].values,
         'Pclass': x_test['Pclass'].values,
         'Old': x_test['Old'].values,
-        'Embarked': x_test['Embarked'].values,
+        'Embarked': x_test['Embarked'].to_numpy(dtype=object),
     })
     
     assert np.allclose(pred_ebm, pred_onnx[0])
